@@ -1,0 +1,8 @@
+[theme]
+base="light"
+
+primaryColor="#4F46E5"            # Modern Indigo (buttons, highlights)
+backgroundColor="#F9FAFB"         # Soft light gray background
+secondaryBackgroundColor="#FFFFFF" # Cards / sidebar
+textColor="#111827"               # Dark modern text
+font="sans serif"
