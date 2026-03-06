@@ -1,12 +1,18 @@
 from database.db import SessionLocal
 from database.models import Transaction
 from services.categorizer import categorize_transaction
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
+analyzer = SentimentIntensityAnalyzer()
+
+def _sentiment_label(score: float) -> str:
+    if score >= 0.05:
+        return "Positive"
+    if score <= -0.05:
+        return "Negative"
+    return "Neutral"
 
 def save_transactions(user_id: int, txns: list[dict], source: str = "csv") -> int:
-    if not user_id:
-        raise ValueError("Missing user_id")
-
     inserted = 0
     db = SessionLocal()
 
@@ -24,8 +30,12 @@ def save_transactions(user_id: int, txns: list[dict], source: str = "csv") -> in
             except Exception:
                 continue
 
-            # ✅ auto category (if not provided)
+            # ✅ category
             category = t.get("category") or categorize_transaction(desc, amount)
+
+            # ✅ sentiment
+            score = analyzer.polarity_scores(desc)["compound"]
+            label = _sentiment_label(score)
 
             # dedupe
             exists = (
@@ -47,15 +57,16 @@ def save_transactions(user_id: int, txns: list[dict], source: str = "csv") -> in
                     date=t["date"],
                     description=desc[:500],
                     amount=amount,
-                    category=category,   # ✅ NOW FILLS CATEGORY
+                    category=category,
                     source=source,
                     raw_text=t.get("raw_text"),
+                    sentiment_score=score,      # ✅ saved
+                    sentiment_label=label,      # ✅ saved
                 )
             )
             inserted += 1
 
         db.commit()
         return inserted
-
     finally:
         db.close()
