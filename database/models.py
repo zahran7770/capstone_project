@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, Date, DateTime, ForeignKey, Text
+import datetime
 from sqlalchemy.orm import relationship
 from database.db import Base
 
@@ -35,6 +36,8 @@ class Transaction(Base):
     category = Column(String(100), nullable=True)
     source = Column(String(50), nullable=True)   # ← ADD THIS
     raw_text = Column(Text, nullable=True)       # ← ADD THIS
+    sentiment_score = Column(Float, nullable=True)  # compound score [-1..1]
+    sentiment_label = Column(String(20), nullable=True)  # Positive/Neutral/Negative
 
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
