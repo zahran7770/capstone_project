@@ -56,3 +56,16 @@ class Limit(Base):
 
     user_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", back_populates="limits")
+
+class SentimentFeedback(Base):
+    __tablename__ = "sentiment_feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    transaction_id = Column(Integer, ForeignKey("transactions.id", ondelete="CASCADE"), nullable=False)
+
+    predicted_label = Column(String(20), nullable=False)
+    user_label = Column(String(20), nullable=False)      # what user says is correct
+    is_correct = Column(Integer, nullable=False)         # 1 = correct, 0 = wrong
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
