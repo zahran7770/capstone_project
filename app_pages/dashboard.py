@@ -3,11 +3,14 @@ import pandas as pd
 from datetime import date, timedelta
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 from database.db import SessionLocal
-from database.models import Transaction, Limit
+from database.models import Transaction, Limit, SentimentFeedback
+from utils.sentiment_feedback import save_feedback
 
 
 def _sentiment_label(compound: float) -> str:
+    """Map VADER compound score to a simple label."""
     if compound >= 0.05:
         return "Positive"
     if compound <= -0.05:
@@ -16,6 +19,7 @@ def _sentiment_label(compound: float) -> str:
 
 
 def _mood_from_score(score: float) -> tuple[str, str]:
+    """Return (emoji, label) for a single overall “mood” score. Score in [-1, 1]."""
     if score >= 0.35:
         return "😄", "Very Positive"
     if score >= 0.05:
@@ -28,17 +32,15 @@ def _mood_from_score(score: float) -> tuple[str, str]:
 
 
 def _date_window(time_range: str) -> tuple[date | None, date | None]:
+    """Return (start_date, end_date) inclusive. For All Time returns (None, None)."""
     end = date.today()
-
     if time_range == "Daily":
         return end, end
     if time_range == "Weekly":
         return end - timedelta(days=7), end
     if time_range == "Monthly":
         return end.replace(day=1), end
-
-    # All Time: no filtering
-    return None, None
+    return None, None  # All Time
 
 
 def dashboard_page():
@@ -63,44 +65,60 @@ def dashboard_page():
     # =========================
     # TIME RANGE SLIDER
     # =========================
-    time_range = st.select_slider(
-        "Time Range",
-        options=["Daily", "Weekly", "Monthly", "All Time"],
-        value="All Time",
-        key="time_range_slider",
-    )
+    st.markdown("### 📅 Filter by Date")
 
-    start_date, end_date = _date_window(time_range)
+    col1, col2 = st.columns(2)
+
+    with col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=date.today() - timedelta(days=30)
+        )
+
+    with col2:
+        end_date = st.date_input(
+            "End Date",
+            value=date.today()
+        )
 
     # =========================
-    # LOAD DATA FROM DB (FIXED)
+    # LOAD DATA FROM DB
     # =========================
     db = SessionLocal()
     try:
+        # Base query: all transactions for this user
         q = db.query(Transaction).filter(Transaction.user_id == user_id)
 
-        # Only apply date filters when we actually have dates
+        # Apply dates only when not "All Time"
         if start_date is not None and end_date is not None:
             q = q.filter(Transaction.date >= start_date, Transaction.date <= end_date)
 
         txs = q.order_by(Transaction.date.desc()).all()
 
-        # also load limits (for alerting / remaining)
+        # Limits (optional) for budget alerts
         limits = db.query(Limit).filter(Limit.user_id == user_id).all()
+
+        # Feedback for accuracy KPI
+        feedback_rows = db.query(SentimentFeedback).filter(SentimentFeedback.user_id == user_id).all()
     finally:
         db.close()
 
-    st.caption(f"Loaded {len(txs)} transactions from database.")  # debug / reassurance
+    st.caption(f"Loaded {len(txs)} transactions from database.")
 
-    # Convert transactions -> DataFrame
+    # =========================
+    # BUILD DATAFRAME (include id + sentiment fields)
+    # =========================
     df = pd.DataFrame(
         [
             {
+                "id": t.id,
                 "date": t.date,
                 "description": t.description,
                 "amount": float(t.amount),
                 "category": t.category or "Other",
                 "source": getattr(t, "source", None),
+                "sentiment_label": getattr(t, "sentiment_label", None),
+                "sentiment_score": getattr(t, "sentiment_score", None),
             }
             for t in txs
         ]
@@ -113,29 +131,22 @@ def dashboard_page():
     # =========================
     # KPIs (calculated)
     # =========================
-    # Assumption: negative amounts = spending (adjust if your bank uses positives for spend)
+    # Assumption: spending = negative amounts (adjust if your CSV uses positive for spend)
     spend_df = df[df["amount"] < 0].copy()
     spend_df["spend"] = spend_df["amount"].abs()
 
     today = date.today()
 
-    # Always useful reference KPIs
     today_spend = spend_df[spend_df["date"] == today]["spend"].sum()
-
     week_ago = today - timedelta(days=7)
     week_spend = spend_df[(spend_df["date"] >= week_ago) & (spend_df["date"] <= today)]["spend"].sum()
-
     month_start = today.replace(day=1)
     month_spend = spend_df[(spend_df["date"] >= month_start) & (spend_df["date"] <= today)]["spend"].sum()
-
-    # All-time spend KPI (for All Time option)
     all_time_spend = spend_df["spend"].sum()
 
-    # monthly budget from limits
     monthly_budget = sum(l.monthly_limit for l in limits) if limits else 0.0
     remaining = (monthly_budget - month_spend) if monthly_budget else 0.0
 
-    # Dynamic KPI based on slider
     if time_range == "Daily":
         selected_label, selected_spend = "Today", today_spend
     elif time_range == "Weekly":
@@ -153,7 +164,17 @@ def dashboard_page():
     col4.metric("Remaining Budget", f"${remaining:,.2f}" if monthly_budget else "Set limits")
 
     # =========================
-    # ALERT SECTION
+    # Sentiment Accuracy KPI (from feedback)
+    # =========================
+    if feedback_rows:
+        correct = sum(1 for f in feedback_rows if int(f.is_correct) == 1)
+        acc = correct / len(feedback_rows)
+        st.metric("Sentiment Accuracy (from your feedback)", f"{acc * 100:.1f}%")
+    else:
+        st.info("No sentiment feedback yet. Use 👍/👎 below to measure accuracy.")
+
+    # =========================
+    # ALERT SECTION (based on limits)
     # =========================
     if monthly_budget > 0:
         if month_spend > monthly_budget:
@@ -166,7 +187,7 @@ def dashboard_page():
         st.info("Set category limits to enable budget alerts and remaining budget calculations.")
 
     # =========================
-    # CHARTS
+    # CHARTS (real)
     # =========================
     st.markdown("## Spending Insights")
     chart_col1, chart_col2 = st.columns(2)
@@ -188,7 +209,7 @@ def dashboard_page():
             st.line_chart(daily_trend)
 
     # =========================
-    # RECENT TRANSACTIONS
+    # RECENT TRANSACTIONS (real)
     # =========================
     st.markdown("## Recent Transactions")
     recent = df.sort_values("date", ascending=False).head(10).copy()
@@ -197,27 +218,97 @@ def dashboard_page():
     st.dataframe(recent[["Date", "Description", "Category", "Amount"]], use_container_width=True, height=280)
 
     # =========================
-    # SENTIMENT ANALYSIS
+    # ✅ FEEDBACK PANEL (inserted here)
     # =========================
-    st.markdown("## 🧠 Money Mood (Sentiment Analysis)")
-    st.caption("We analyze transaction descriptions to estimate your spending “mood” for this period.")
+    st.markdown("## ✅ Help Us Improve Sentiment")
+    st.caption("Quickly confirm if the predicted sentiment looks right for the transaction description.")
 
+    # Use the latest 5 transactions shown to the user
+    feedback_df = df.sort_values("date", ascending=False).head(5).copy()
+
+    # If sentiment wasn't saved yet for older rows, compute it on the fly (display only)
     analyzer = SentimentIntensityAnalyzer()
 
-    scored = []
-    for _, r in df.iterrows():
-        comp = analyzer.polarity_scores(str(r["description"]))["compound"]
-        scored.append(
-            {
-                "Date": r["date"],
-                "Description": r["description"],
-                "Amount": r["amount"],
-                "Sentiment": _sentiment_label(comp),
-                "Score": round(comp, 3),
-            }
-        )
+    for _, row in feedback_df.iterrows():
+        tx_id = int(row["id"])
+        desc = str(row["description"])
+        predicted = row.get("sentiment_label")
 
-    scored_df = pd.DataFrame(scored)
+        # If missing in DB, compute a display prediction
+        if not predicted or predicted == "None":
+            comp = analyzer.polarity_scores(desc)["compound"]
+            predicted = _sentiment_label(comp)
+
+        c1, c2, c3 = st.columns([4, 1, 1])
+
+        with c1:
+            st.write(f"**{desc}**")
+            st.caption(f"Predicted sentiment: `{predicted}`")
+
+        with c2:
+            if st.button("👍 Correct", key=f"ok_{tx_id}"):
+                save_feedback(user_id, tx_id, predicted, predicted)
+                st.success("Feedback saved 👍")
+                st.rerun()
+
+        with c3:
+            if st.button("👎 Wrong", key=f"bad_{tx_id}"):
+                st.session_state[f"show_label_{tx_id}"] = True
+
+        # If user clicked wrong: show selector + submit
+        if st.session_state.get(f"show_label_{tx_id}", False):
+            correct_label = st.selectbox(
+                f"Correct label for transaction {tx_id}",
+                ["Positive", "Neutral", "Negative"],
+                key=f"label_{tx_id}",
+            )
+            if st.button("Submit", key=f"submit_{tx_id}"):
+                save_feedback(user_id, tx_id, predicted, correct_label)
+                st.success("Correct label saved ✅")
+                st.session_state[f"show_label_{tx_id}"] = False
+                st.rerun()
+
+    # =========================
+    # SENTIMENT ANALYSIS (dashboard section)
+    # =========================
+    st.markdown("## 🧠 Money Mood (Sentiment Analysis)")
+    st.caption("Sentiment is calculated from transaction descriptions for the selected period.")
+
+    # If sentiment is already stored, use it; otherwise compute it
+    if df["sentiment_score"].notna().any():
+        # Use stored values where possible
+        scored_df = df.copy()
+        # Fill missing scores on the fly
+        for i, r in scored_df[scored_df["sentiment_score"].isna()].iterrows():
+            comp = analyzer.polarity_scores(str(r["description"]))["compound"]
+            scored_df.at[i, "sentiment_score"] = comp
+            scored_df.at[i, "sentiment_label"] = _sentiment_label(comp)
+
+        scored_df.rename(
+            columns={
+                "date": "Date",
+                "description": "Description",
+                "amount": "Amount",
+                "sentiment_label": "Sentiment",
+                "sentiment_score": "Score",
+            },
+            inplace=True,
+        )
+    else:
+        # Compute everything if nothing stored
+        rows = []
+        for _, r in df.iterrows():
+            comp = analyzer.polarity_scores(str(r["description"]))["compound"]
+            rows.append(
+                {
+                    "Date": r["date"],
+                    "Description": r["description"],
+                    "Amount": r["amount"],
+                    "Sentiment": _sentiment_label(comp),
+                    "Score": round(comp, 3),
+                }
+            )
+        scored_df = pd.DataFrame(rows)
 
     avg_compound = float(scored_df["Score"].mean()) if not scored_df.empty else 0.0
     emoji, mood_label = _mood_from_score(avg_compound)
@@ -256,5 +347,7 @@ def dashboard_page():
             st.write(f"• {row['Description']} ({row['Score']:.2f})")
 
     with st.expander("Show sentiment per transaction"):
-        scored_df["Amount"] = scored_df["Amount"].map(lambda x: f"${x:,.2f}")
-        st.dataframe(scored_df, use_container_width=True, height=300)
+        scored_df_display = scored_df.copy()
+        scored_df_display["Amount"] = scored_df_display["Amount"].map(lambda x: f"${x:,.2f}")
+        st.dataframe(scored_df_display[["Date", "Description", "Amount", "Sentiment", "Score"]],
+                     use_container_width=True, height=300)
