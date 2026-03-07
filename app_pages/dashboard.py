@@ -9,6 +9,7 @@ from database.models import Transaction, Limit, SentimentFeedback
 from utils.sentiment_feedback import save_feedback
 
 
+
 def _sentiment_label(compound: float) -> str:
     """Map VADER compound score to a simple label."""
     if compound >= 0.05:
@@ -43,6 +44,7 @@ def _date_window(time_range: str) -> tuple[date | None, date | None]:
     return None, None  # All Time
 
 
+
 def dashboard_page():
     # =========================
     # PROTECT PAGE
@@ -55,6 +57,21 @@ def dashboard_page():
     if not user_id:
         st.error("Missing user_id. Please login again.")
         st.stop()
+        # =========================
+        # BUTTON STYLING (FINTECH STYLE)
+        # =========================
+        st.markdown(
+            """
+            <style>
+            div.stButton > button {
+                border-radius: 10px;
+                font-weight: 600;
+                height: 42px;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
     # =========================
     # HEADER
@@ -63,23 +80,72 @@ def dashboard_page():
     st.markdown(f"### 👋 Welcome, {st.session_state.get('username', 'User')}")
 
     # =========================
-    # TIME RANGE SLIDER
+    # FINTECH-STYLE DATE FILTER
     # =========================
-    st.markdown("### 📅 Filter by Date")
+    st.markdown("## 📅 Date Filter")
 
+    # Initialize default filter values once
+    if "start_date" not in st.session_state:
+        st.session_state["start_date"] = date.today() - timedelta(days=30)
+
+    if "end_date" not in st.session_state:
+        st.session_state["end_date"] = date.today()
+
+    # Quick range buttons
+    b1, b2, b3, b4, b5 = st.columns(5)
+
+    with b1:
+        if st.button("Last 7 Days", use_container_width=True):
+            st.session_state["start_date"] = date.today() - timedelta(days=7)
+            st.session_state["end_date"] = date.today()
+
+    with b2:
+        if st.button("Last 30 Days", use_container_width=True):
+            st.session_state["start_date"] = date.today() - timedelta(days=30)
+            st.session_state["end_date"] = date.today()
+
+    with b3:
+        if st.button("This Month", use_container_width=True):
+            st.session_state["start_date"] = date.today().replace(day=1)
+            st.session_state["end_date"] = date.today()
+
+    with b4:
+        if st.button("This Year", use_container_width=True):
+            st.session_state["start_date"] = date(date.today().year, 1, 1)
+            st.session_state["end_date"] = date.today()
+
+    with b5:
+        if st.button("All Time", use_container_width=True):
+            st.session_state["start_date"] = date(2000, 1, 1)
+            st.session_state["end_date"] = date.today()
+
+    # Manual date pickers
     col1, col2 = st.columns(2)
 
     with col1:
         start_date = st.date_input(
             "Start Date",
-            value=date.today() - timedelta(days=30)
+            value=st.session_state["start_date"],
+            key="dashboard_start_date",
         )
 
     with col2:
         end_date = st.date_input(
             "End Date",
-            value=date.today()
+            value=st.session_state["end_date"],
+            key="dashboard_end_date",
         )
+
+    # Save manual edits back into session
+    st.session_state["start_date"] = start_date
+    st.session_state["end_date"] = end_date
+
+    # Safety check
+    if start_date > end_date:
+        st.error("Start Date cannot be after End Date.")
+        st.stop()
+
+    st.caption(f"Showing data from **{start_date}** to **{end_date}**")
 
     # =========================
     # LOAD DATA FROM DB
@@ -87,13 +153,16 @@ def dashboard_page():
     db = SessionLocal()
     try:
         # Base query: all transactions for this user
-        q = db.query(Transaction).filter(Transaction.user_id == user_id)
-
-        # Apply dates only when not "All Time"
-        if start_date is not None and end_date is not None:
-            q = q.filter(Transaction.date >= start_date, Transaction.date <= end_date)
-
-        txs = q.order_by(Transaction.date.desc()).all()
+        txs = (
+            db.query(Transaction)
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.date >= start_date,
+                Transaction.date <= end_date,
+            )
+            .order_by(Transaction.date.desc())
+            .all()
+        )
 
         # Limits (optional) for budget alerts
         limits = db.query(Limit).filter(Limit.user_id == user_id).all()
@@ -147,14 +216,8 @@ def dashboard_page():
     monthly_budget = sum(l.monthly_limit for l in limits) if limits else 0.0
     remaining = (monthly_budget - month_spend) if monthly_budget else 0.0
 
-    if time_range == "Daily":
-        selected_label, selected_spend = "Today", today_spend
-    elif time_range == "Weekly":
-        selected_label, selected_spend = "This Week", week_spend
-    elif time_range == "Monthly":
-        selected_label, selected_spend = "This Month", month_spend
-    else:
-        selected_label, selected_spend = "All Time", all_time_spend
+    selected_label = "Selected Period"
+    selected_spend = spend_df["spend"].sum()
 
     st.markdown("## Overview")
     col1, col2, col3, col4 = st.columns(4)
@@ -201,7 +264,7 @@ def dashboard_page():
             st.bar_chart(cat_totals)
 
     with chart_col2:
-        st.subheader(f"{time_range} Trend")
+        st.subheader("Spending Trend")
         if spend_df.empty:
             st.info("No spending trend available.")
         else:
