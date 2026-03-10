@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from datetime import date, timedelta
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -260,8 +261,17 @@ def dashboard_page():
         if spend_df.empty:
             st.info("No spending transactions (negative amounts) found in this period.")
         else:
-            cat_totals = spend_df.groupby("category")["spend"].sum().sort_values(ascending=False)
-            st.bar_chart(cat_totals)
+            cat_totals = spend_df.groupby("category")["spend"].sum().reset_index()
+
+            fig = px.pie(
+                cat_totals,
+                names="category",
+                values="spend",
+                hole=0.5,  # donut style
+                title="Spending by Category"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
 
     with chart_col2:
         st.subheader("Spending Trend")
@@ -394,7 +404,22 @@ def dashboard_page():
 
     with left:
         st.subheader("Sentiment Breakdown")
-        st.bar_chart({"Positive": pos, "Neutral": neu, "Negative": neg})
+        sentiment_data = {
+            "Sentiment": ["Positive", "Neutral", "Negative"],
+            "Count": [pos, neu, neg]
+        }
+
+        sent_df = pd.DataFrame(sentiment_data)
+
+        fig = px.pie(
+            sent_df,
+            names="Sentiment",
+            values="Count",
+            hole=0.4,
+            title="Sentiment Breakdown"
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
 
     with right:
         st.subheader("Highlights")
