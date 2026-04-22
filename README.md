@@ -2,6 +2,12 @@
 This app helps users understand their
 spending habits, manage budgets, and make
 better financial decisions.
+An AI-powered finance dashboard to track
+spending, analyze behavior, and provide
+smart insights. It detects user sentiment by
+automatically reading transaction
+descriptions to understand the 'mood'
+behind every purchase.
  ![Alt text](menu.PNG)
 
  ## 🛠 Tech Stack
@@ -33,6 +39,13 @@ parser.py, insights.py​
 
 └── utils/ → behavior_analysis.py, helpers.py,
 sentiment_feedback.py
+
+# Algorithms Used​
+• VADER Sentiment Analysis​
+• Rule-based classification​
+• Spending behavior detection​
+• GPT (LLM for chatbot & insights)
+ ![Alt text](sentiment.PNG)
 
  ## 🚀 How to Run This Project
 
